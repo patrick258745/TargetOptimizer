@@ -82,37 +82,33 @@ private:
 	std::string m_file;
 };
 
+struct SignalStat
+{
+	double minTime;
+	double maxTime;
+	double minValue;
+	double maxValue;
+};
+
 class PlotRegion : public zoomable_region
 {
 public:
-	PlotRegion (drawable_window& w) : zoomable_region(w,MOUSE_CLICK | MOUSE_WHEEL | KEYBOARD_EVENTS)
-	{
-		enable_events();
-	}
+	PlotRegion (drawable_window& w);
+	~PlotRegion ();
 
-	~PlotRegion ()
-	{
-		disable_events();
-		parent.invalidate_rectangle(rect);
-	}
+	void setBounds(const BoundVector &bounds);
+	void setOrigF0(const TimeSignal &f0);
+	void setOptimalF0(const TimeSignal &f0);
+	void setTargets(const TargetVector &targets);
 
 private:
+    void draw (const canvas& c) const;
+    SignalStat analyzeSignal(const TimeSignal &f0) const;
 
-    void draw (
-        const canvas& c
-    ) const
-    {
-        zoomable_region::draw(c);
-
-        rectangle area = c.intersect(display_rect());
-        if (area.is_empty() == true)
-            return;
-
-        if (enabled)
-            fill_rect(c,display_rect(),255);
-        else
-            fill_rect(c,display_rect(),128);
-    }
+    TimeSignal m_optF0;
+    TimeSignal m_origF0;
+    BoundVector m_bounds;
+    TargetVector m_targets;
 };
 
 class MainWindow : public drawable_window
@@ -135,23 +131,18 @@ private:
     void onReadyForOptimize ();
     void optimize ();
     ParameterSet readParameters();
-
-    void on_cpt_grid_modified(unsigned long row, unsigned long col);
-    void on_evidence_toggled ();
-    void on_menu_file_quit ();
-    void on_menu_file_save ();
-    void on_menu_file_save_as ();
-    void on_menu_help_about ();
-    void on_menu_help_help ();
-    void on_node_deleted ();
-    void on_node_deselected ( unsigned long n );
-    void on_node_selected (unsigned long n);
-    void on_save_file_selected ( const std::string& file_name);
-    void on_sel_node_evidence_modified ();
-    void on_sel_node_num_values_modified ();
-    void on_sel_node_text_modified ();
-    void on_window_resized ();
-    void recalculate_probabilities ();
+    void onSaveFileGesture (const std::string& fileName);
+    void onButtonSaveAsGesture();
+    void onSaveFileCsv (const std::string& fileName);
+    void onMenuSaveAsCsv();
+    void onSaveFilePitchTier (const std::string& fileName);
+    void onMenuSaveAsPitchTier();
+    void blockMainWindow();
+    void unblockMainWindow();
+    void onMenuFileQuit();
+    void onMenuFileHelp();
+    void onMenuFileAbout();
+    void on_window_resized();
 
     // Member data
     const rgb_pixel colorBlack;

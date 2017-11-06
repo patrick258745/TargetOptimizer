@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <fstream>
+#include <algorithm>
 #include <dlib/string.h>
+#include <dlib/misc_api.h>
 #include "dataio.h"
 
 
@@ -197,6 +199,138 @@ void CsvWriter::writeTargets(const Sample &onset, const TargetVector &targets) c
 	}
 }
 
+PlotRegion::PlotRegion (drawable_window& w) : zoomable_region(w,MOUSE_CLICK | MOUSE_WHEEL | KEYBOARD_EVENTS)
+{
+	enable_events();
+}
+
+PlotRegion::~PlotRegion ()
+{
+	disable_events();
+	parent.invalidate_rectangle(rect);
+}
+
+void PlotRegion::setBounds(const BoundVector &bounds)
+{
+	m_bounds = bounds;
+	parent.invalidate_rectangle(rect);
+};
+
+void PlotRegion::setOrigF0(const TimeSignal &f0)
+{
+	m_origF0 = f0;
+	parent.invalidate_rectangle(rect);
+}
+
+void PlotRegion::setOptimalF0(const TimeSignal &f0)
+{
+	m_optF0 = f0;
+	parent.invalidate_rectangle(rect);
+}
+
+void PlotRegion::setTargets(const TargetVector &targets)
+{
+	m_targets = targets;
+	parent.invalidate_rectangle(rect);
+}
+
+void PlotRegion::draw (const canvas& c) const
+{
+	zoomable_region::draw(c);
+
+	rectangle area = c.intersect(display_rect());
+	if (area.is_empty() == true)
+		return;
+
+	if (enabled)
+		fill_rect(c,display_rect(),255);
+	else
+		fill_rect(c,display_rect(),128);
+
+	SignalStat scaler = {0,0,0,0};
+	// draw bounds
+	if (!m_bounds.empty())
+	{
+		scaler.minTime = m_bounds[0]-0.1;
+		scaler.maxTime = m_bounds[m_bounds.size()-1]+0.1;
+		for (int i = 0; i < m_bounds.size(); ++i)
+		{
+			double position = ((m_bounds[i]-scaler.minTime)/(scaler.maxTime-scaler.minTime))*width();
+			point p(graph_to_gui_space(point(position,0)));
+			point p2(graph_to_gui_space(point(position,height())));
+			draw_line(c,p2,p ,rgb_pixel(0,0,0), area);
+		}
+	}
+
+	// draw original f0
+	if (!m_origF0.empty())
+	{
+		SignalStat stat = analyzeSignal(m_origF0);
+		scaler.maxValue = stat.maxValue+5;
+		scaler.minValue = stat.minValue-5;
+		if (scaler.maxTime == 0.0)
+		{
+			scaler.maxTime = stat.maxTime;
+			scaler.minTime = stat.minTime;
+		}
+		for (int i=0; i<m_origF0.size(); ++i)
+		{
+			double x = ((m_origF0[i].time-scaler.minTime)/(scaler.maxTime-scaler.minTime))*width();
+			double y = ((m_origF0[i].value-scaler.minValue)/(scaler.maxValue-scaler.minValue))*height();
+			draw_solid_circle(c, graph_to_gui_space(point(x,y)), 2, rgb_pixel(0,0,255));
+		}
+	}
+
+	// draw optimal f0
+	if(!m_optF0.empty())
+	{
+		for (int i=0; i<m_optF0.size(); ++i)
+		{
+			double x1 = ((m_optF0[i].time-scaler.minTime)/(scaler.maxTime-scaler.minTime))*width();
+			double y1 = ((m_optF0[i].value-scaler.minValue)/(scaler.maxValue-scaler.minValue))*height();
+			//double x2 = ((m_optF0[i+1].time-scaler.minTime)/(scaler.maxTime-scaler.minTime))*width();
+			//double y2 = ((m_optF0[i+1].value-scaler.minValue)/(scaler.maxValue-scaler.minValue))*height();
+			draw_solid_circle(c, graph_to_gui_space(point(x1,y1)), 1.5, rgb_pixel(100,200,100));
+			//draw_line(c,point(x1,y1),point(x2,y2) ,rgb_pixel(255,0,0), area);
+		}
+	}
+
+	// draw optimal targets
+	if(!m_targets.empty())
+	{
+		double begin = m_optF0[0].time;
+		double end = begin;
+		for (int i=0; i<m_targets.size(); ++i)
+		{
+			begin = end;
+			end = begin + m_targets[i].duration;
+			double x1 = ((begin-scaler.minTime)/(scaler.maxTime-scaler.minTime))*width();
+			double y1 = ((m_targets[i].offset-scaler.minValue)/(scaler.maxValue-scaler.minValue))*height();
+			double x2 = ((end-scaler.minTime)/(scaler.maxTime-scaler.minTime))*width();
+			double y2 = (((m_targets[i].offset + m_targets[i].slope*m_targets[i].duration)-scaler.minValue)/(scaler.maxValue-scaler.minValue))*height();
+			draw_line(c,graph_to_gui_space(point(x1,y1)), graph_to_gui_space(point(x2,y2)) ,rgb_pixel(200,100,100), area);
+		}
+	}
+}
+
+SignalStat PlotRegion::analyzeSignal(const TimeSignal &f0) const
+{
+	std::vector<double> times, values;
+	for (int i=0; i<f0.size(); ++i)
+	{
+		times.push_back(f0[i].time);
+		values.push_back(f0[i].value);
+	}
+
+	SignalStat result;
+	result.minTime = *std::min_element(times.begin(), times.end());
+	result.maxTime = *std::max_element(times.begin(), times.end());
+	result.minValue = *std::min_element(values.begin(), values.end());
+	result.maxValue = *std::max_element(values.begin(), values.end());
+
+	return result;
+}
+
 MainWindow::MainWindow() :
     colorBlack(0,0,0),
     colorWhite(255,255,255),
@@ -226,22 +360,14 @@ MainWindow::MainWindow() :
     // position the widget that is responsible for drawing the directed graph, the graph_drawer,
     // just below the mbar (menu bar) widget.
     graph.set_pos(15,mbar.bottom()+5);
+    graph.set_min_zoom_scale(1.0);
     set_size(750,520);
 
     // register the event handlers with their respective widgets
-//    btn_calculate.set_click_handler              (*this, &main_window::recalculate_probabilities);
-//    cpt_grid.set_text_modified_handler           (*this, &main_window::on_cpt_grid_modified);
-//    graph_drawer.set_graph_modified_handler      (*this, &main_window::on_graph_modified);
-//    graph_drawer.set_node_deleted_handler        (*this, &main_window::on_node_deleted);
-//    graph_drawer.set_node_deselected_handler     (*this, &main_window::on_node_deselected);
-//    graph_drawer.set_node_selected_handler       (*this, &main_window::on_node_selected);
-//    sel_node_evidence.set_text_modified_handler  (*this, &main_window::on_sel_node_evidence_modified);
-//    sel_node_is_evidence.set_click_handler       (*this, &main_window::on_evidence_toggled);
-//    sel_node_num_values.set_text_modified_handler(*this, &main_window::on_sel_node_num_values_modified);
-//    sel_node_text.set_text_modified_handler      (*this, &main_window::on_sel_node_text_modified);
     btnLoadTextGrid.set_click_handler(*this, &MainWindow::onButtonTextGridOpen);
     btnLoadPitchTier.set_click_handler(*this, &MainWindow::onButtonPitchTierOpen);
     btnOptimize.set_click_handler(*this, &MainWindow::onButtonOptimize);
+    btnStoreGesture.set_click_handler(*this, &MainWindow::onButtonSaveAsGesture);
 
     // now set the text of some of our buttons and labels
     btnLoadTextGrid.set_name("Load TextGrid");
@@ -269,17 +395,20 @@ MainWindow::MainWindow() :
     mbar.set_menu_name(1,"Help",'H');
 
     // add the entries to the File menu.
-//    mbar.menu(0).add_menu_item(menu_item_text("Open",   *this, &main_window::on_menu_file_open,    'O'));
-//    mbar.menu(0).add_menu_item(menu_item_separator());
-//    mbar.menu(0).add_menu_item(menu_item_text("Save",   *this, &main_window::on_menu_file_save,    'S'));
-//    mbar.menu(0).add_menu_item(menu_item_text("Save As",*this, &main_window::on_menu_file_save_as, 'a'));
-//    mbar.menu(0).add_menu_item(menu_item_separator());
-//    mbar.menu(0).add_menu_item(menu_item_text("Quit",   *this, &main_window::on_menu_file_quit,    'Q'));
-//
-//    // Add the entries to the Help menu.
-//    mbar.menu(1).add_menu_item(menu_item_text("Help",   *this, &main_window::on_menu_help_help,    'e'));
-//    mbar.menu(1).add_menu_item(menu_item_text("About",  *this, &main_window::on_menu_help_about,   'A'));
+    mbar.menu(0).add_menu_item(menu_item_text("Open TextGrid", *this, &MainWindow::onButtonTextGridOpen, 'T'));
+    mbar.menu(0).add_menu_item(menu_item_text("Open PitchTier", *this, &MainWindow::onButtonPitchTierOpen, 'P'));
+    mbar.menu(0).add_menu_item(menu_item_separator());
+    mbar.menu(0).add_menu_item(menu_item_text("Optimize", *this, &MainWindow::onButtonOptimize, 'O'));
+    mbar.menu(0).add_menu_item(menu_item_separator());
+    mbar.menu(0).add_menu_item(menu_item_text("Save As Gesture",*this, &MainWindow::onButtonSaveAsGesture, 'G'));
+    mbar.menu(0).add_menu_item(menu_item_text("Save As csv",*this, &MainWindow::onMenuSaveAsCsv, 'c'));
+    mbar.menu(0).add_menu_item(menu_item_text("Save As PitchTier",*this, &MainWindow::onMenuSaveAsPitchTier, 'i'));
+    mbar.menu(0).add_menu_item(menu_item_separator());
+    mbar.menu(0).add_menu_item(menu_item_text("Quit",   *this, &MainWindow::onMenuFileQuit,    'Q'));
 
+    // Add the entries to the Help menu.
+    mbar.menu(1).add_menu_item(menu_item_text("Help",   *this, &MainWindow::onMenuFileHelp,'H'));
+    mbar.menu(1).add_menu_item(menu_item_text("About",  *this, &MainWindow::onMenuFileAbout,'A'));
 
     // call our helper functions and window resize event to get the widgets
     // to all arrange themselves correctly in our window.
@@ -372,7 +501,7 @@ void MainWindow::on_window_resized ()
     graph.set_size(0.97*width,0.55*height-+mbar.height());
     searchGrid.set_size(0.3*width,0.25*height);
     penaltyGrid.set_size(0.3*width,0.25*height);
-    targetGrid.set_size(0.35*width,0.22*height);
+    targetGrid.set_size(0.35*width,0.25*height);
     // tell the tabbed display to make itself just the right size to contain
     // the two probability tables.
     tabs.fit_to_contents();
@@ -402,7 +531,7 @@ void MainWindow::on_window_resized ()
 	recOptions.wrap_around(selOnset.get_rect()+tabs.get_rect());
 	recTargets.wrap_around(targetGrid.get_rect());
 	recActions.wrap_around(btnLoadTextGrid.get_rect()+btnStoreGesture.get_rect());
-	graph.disable();
+	//graph.disable();
 }
 
 void MainWindow::openTextGrid (const std::string& fileName)
@@ -412,6 +541,7 @@ void MainWindow::openTextGrid (const std::string& fileName)
 		// process TextGrid input
 		TextGridReader tgreader (fileName);
 		m_bounds = tgreader.getBounds();
+		graph.setBounds(m_bounds);
     }
     catch (...)
     {
@@ -426,6 +556,7 @@ void MainWindow::openPitchTier (const std::string& fileName)
 		// process PitchTier input
 		PitchTierReader ptreader (fileName);
 		m_origF0 = ptreader.getF0();
+		graph.setOrigF0(m_origF0);
         set_title("Target Optimizer - " + left_substr(right_substr(fileName,"\\/"), "."));
     }
     catch (...)
@@ -464,6 +595,7 @@ void MainWindow::onReadyForOptimize ()
 void MainWindow::onButtonOptimize ()
 {
 	// main task
+
 	ParameterSet parameters = readParameters();
 	OptimizationProblem problem (parameters, m_origF0, m_bounds);
 	BobyqaOptimizer optimizer;
@@ -471,7 +603,10 @@ void MainWindow::onButtonOptimize ()
 	m_optTarget = problem.getPitchTargets();
 	m_optF0 = problem.getModelF0();
 	m_optOnset = problem.getOnset();
+	graph.setTargets(m_optTarget);
+	graph.setOptimalF0(m_optF0);
 
+	unblockMainWindow();
 	std::ostringstream msg;
 	msg << "Optimization successful!\nRMSE = " << problem.getRootMeanSquareError() << "\nCORR = " << problem.getCorrelationCoefficient();
 	message_box("Information", msg.str());
@@ -507,4 +642,88 @@ ParameterSet MainWindow::readParameters()
 	}
 
 	return parameters;
+}
+
+// This event is called when the user choses which file to save the graph to
+void MainWindow::onSaveFileGesture (const std::string& fileName)
+{
+    GestureWriter gwriter (fileName + ".ges");
+    gwriter.writeTargets(m_optOnset, m_optTarget);
+}
+
+// This event is called when the user selects from the menu bar File->Save As
+void MainWindow::onButtonSaveAsGesture ()
+{
+    save_file_box(*this, &MainWindow::onSaveFileGesture);
+}
+
+// This event is called when the user choses which file to save the graph to
+void MainWindow::onSaveFileCsv (const std::string& fileName)
+{
+	CsvWriter cwriter (fileName + ".csv");
+	cwriter.writeTargets(m_optOnset, m_optTarget);
+}
+
+// This event is called when the user selects from the menu bar File->Save As
+void MainWindow::onMenuSaveAsCsv ()
+{
+    save_file_box(*this, &MainWindow::onSaveFileCsv);
+}
+
+// This event is called when the user choses which file to save the graph to
+void MainWindow::onSaveFilePitchTier(const std::string& fileName)
+{
+	PitchTierWriter pwriter (fileName + "-tam.PitchTier");
+	pwriter.writeF0(m_optF0);
+}
+
+// This event is called when the user selects from the menu bar File->Save As
+void MainWindow::onMenuSaveAsPitchTier ()
+{
+    save_file_box(*this, &MainWindow::onSaveFilePitchTier);
+}
+
+void MainWindow::blockMainWindow()
+{
+	tabs.disable();
+	targetGrid.disable();
+	btnLoadTextGrid.disable();
+	btnLoadPitchTier.disable();
+	btnOptimize.disable();
+	btnStoreGesture.disable();
+	graph.disable();
+	mbar.disable();
+}
+
+void MainWindow::unblockMainWindow()
+{
+	tabs.enable();
+	targetGrid.enable();
+	btnLoadTextGrid.enable();
+	btnLoadPitchTier.enable();
+	btnOptimize.enable();
+	btnStoreGesture.enable();
+	graph.enable();
+	mbar.enable();
+}
+
+void MainWindow::onMenuFileQuit()
+{
+	close_window();
+}
+
+void MainWindow::onMenuFileHelp()
+{
+	message_box("Help",
+	                "To create new nodes right click on the drawing area.\n"
+	                "To create edges select the parent node and then shift+left click on the child node.\n"
+	                "To remove nodes or edges select them by left clicking and then press the delete key.");
+}
+
+void MainWindow::onMenuFileAbout()
+{
+    message_box("About","This application is the GUI front end to the dlib C++ Library's\n"
+                "Bayesian Network inference utilities\n\n"
+                "Version 1.2\n\n"
+                "See http://dlib.net for updates");
 }

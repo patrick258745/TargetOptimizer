@@ -236,7 +236,7 @@ ParameterSet OptimizationProblem::getParameters() const
 
 TimeSignal OptimizationProblem::getModelF0() const
 {
-	double samplingfrequency = 100; // Hz
+	double samplingfrequency = 200; // Hz
 	double dt = 1.0/samplingfrequency;
 	return m_modelOptimalF0.calculateF0(dt);
 }
